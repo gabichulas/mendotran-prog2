@@ -12,9 +12,9 @@ public class Pasajero extends Persona implements Inspeccionable {
     private double saldoSube;
     private boolean boletoPago;
 
-    public Pasajero(int id, String dni, String nombre, String apellido,
+    public Pasajero(String dni, String nombre, String apellido,
                     String numeroSube, double saldoSube) throws EntradaInvalidaException {
-        this(id, dni, nombre, apellido, numeroSube, saldoSube, false);
+        this(0, dni, nombre, apellido, numeroSube, saldoSube, false);
     }
 
     public Pasajero(int id, String dni, String nombre, String apellido,
@@ -29,8 +29,16 @@ public class Pasajero extends Persona implements Inspeccionable {
         return numeroSube;
     }
 
+    public void setNumeroSube(String numeroSube) throws EntradaInvalidaException {
+        this.numeroSube = Validador.numeroSube(numeroSube);
+    }
+
     public double getSaldoSube() {
         return saldoSube;
+    }
+
+    public void setSaldoSube(double saldoSube) throws EntradaInvalidaException {
+        this.saldoSube = Validador.montoNoNegativo(saldoSube, "saldo SUBE");
     }
 
     public boolean isBoletoPago() {
@@ -46,15 +54,24 @@ public class Pasajero extends Persona implements Inspeccionable {
         saldoSube += Validador.montoPositivo(monto, "monto a cargar");
     }
 
-    /** Descuenta la tarifa del saldo y marca el boleto como pagado. */
-    public void pagarBoleto() throws EntradaInvalidaException {
-        if (saldoSube < TARIFA_BOLETO) {
-            throw new EntradaInvalidaException(String.format(
-                    "Saldo insuficiente: el boleto cuesta %s y %s tiene %s.",
-                    Formato.pesos(TARIFA_BOLETO), getNombreCompleto(), Formato.pesos(saldoSube)));
+    /**
+     * Descuenta la tarifa indicada si el saldo alcanza y marca el boleto como pago.
+     * Devuelve {@code true} si pudo abonarse o {@code false} si el saldo fue insuficiente.
+     */
+    public boolean pagarBoleto(double tarifa) throws EntradaInvalidaException {
+        double importe = Validador.montoPositivo(tarifa, "tarifa");
+        if (saldoSube < importe) {
+            boletoPago = false;
+            return false;
         }
-        saldoSube -= TARIFA_BOLETO;
+        saldoSube -= importe;
         boletoPago = true;
+        return true;
+    }
+
+    /** Sobrecarga que utiliza la tarifa general ({@link #TARIFA_BOLETO}). */
+    public boolean pagarBoleto() throws EntradaInvalidaException {
+        return pagarBoleto(TARIFA_BOLETO);
     }
 
     @Override

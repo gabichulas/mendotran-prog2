@@ -11,6 +11,11 @@ public class Colectivo extends Vehiculo {
 
     private boolean tieneRampa;
 
+    public Colectivo(int interno, String patente, int capacidad,
+                     boolean enServicio, boolean tieneRampa) throws EntradaInvalidaException {
+        this(0, interno, patente, capacidad, enServicio, tieneRampa);
+    }
+
     public Colectivo(int id, int interno, String patente, int capacidad,
                      boolean enServicio, boolean tieneRampa) throws EntradaInvalidaException {
         super(id, interno, patente, capacidad, enServicio);
@@ -36,7 +41,8 @@ public class Colectivo extends Vehiculo {
     }
 
     @Override
-    protected String detalleEspecifico() {
-        return "rampa: " + Formato.siNo(tieneRampa) + (tieneRampa ? "" : " (NO ACCESIBLE)");
+    public String inspeccionar() {
+        return super.inspeccionar() + " | rampa: " + Formato.siNo(tieneRampa)
+                + (tieneRampa ? "" : " (NO ACCESIBLE)");
     }
 }

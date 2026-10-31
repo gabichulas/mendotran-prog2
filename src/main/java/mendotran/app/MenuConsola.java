@@ -17,8 +17,10 @@ import mendotran.modelo.Parada;
 import mendotran.modelo.Pasajero;
 import mendotran.modelo.Persona;
 import mendotran.modelo.Vehiculo;
+import mendotran.util.Formato;
 import mendotran.util.Validador;
 
+import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
@@ -33,13 +35,17 @@ public class MenuConsola {
     }
 
     private final Scanner in;
-    private final PersonaDAO personaDAO = new PersonaDAO();
-    private final VehiculoDAO vehiculoDAO = new VehiculoDAO();
-    private final ParadaDAO paradaDAO = new ParadaDAO();
-    private final LineaDAO lineaDAO = new LineaDAO();
+    private final PersonaDAO personaDAO;
+    private final VehiculoDAO vehiculoDAO;
+    private final ParadaDAO paradaDAO;
+    private final LineaDAO lineaDAO;
 
-    public MenuConsola(Scanner in) {
+    public MenuConsola(Scanner in, Connection conexion) {
         this.in = in;
+        this.personaDAO = new PersonaDAO(conexion);
+        this.vehiculoDAO = new VehiculoDAO(conexion);
+        this.paradaDAO = new ParadaDAO(conexion);
+        this.lineaDAO = new LineaDAO(conexion);
     }
 
     public void iniciar() {
@@ -107,7 +113,6 @@ public class MenuConsola {
         }
     }
 
-    /** Lee una línea; devuelve null si se cerró la entrada (Ctrl+D). */
     private String leer(String prompt) {
         System.out.print(prompt + ": ");
         return in.hasNextLine() ? in.nextLine() : null;
@@ -133,6 +138,11 @@ public class MenuConsola {
         return Validador.parsearSiNo(pedir(prompt + " (s/n)"), prompt);
     }
 
+    private Boolean pedirFiltroSiNo(String prompt) throws EntradaInvalidaException {
+        String texto = pedir(prompt + " (s/n, vacío = todos)");
+        return texto.isBlank() ? null : Validador.parsearSiNo(texto, prompt);
+    }
+
     private List<Integer> pedirIds(String prompt) throws EntradaInvalidaException {
         String texto = pedir(prompt);
         List<Integer> ids = new ArrayList<>();
@@ -155,7 +165,7 @@ public class MenuConsola {
     }
 
     // =====================================================================
-    // Búsquedas auxiliares
+    // Búsquedas auxiliares por ID
     // =====================================================================
 
     private Persona buscarPersona(int id) throws SQLException, EntradaInvalidaException {
@@ -192,14 +202,29 @@ public class MenuConsola {
 
     private void menuPasajeros() {
         submenu("PASAJEROS",
-                new String[]{"Listar", "Registrar pasajero", "Cargar saldo SUBE", "Pagar boleto", "Eliminar"},
+                new String[]{
+                        "Listar pasajeros",
+                        "Buscar pasajero por DNI o nombre (SQL)",
+                        "Registrar pasajero",
+                        "Modificar pasajero",
+                        "Cargar saldo SUBE",
+                        "Pagar boleto",
+                        "Eliminar pasajero"
+                },
                 new Accion[]{
                         () -> imprimirLista(personaDAO.obtenerPorClase(Pasajero.class), "no hay pasajeros"),
+                        this::filtrarPasajeros,
                         this::crearPasajero,
+                        this::modificarPasajero,
                         this::cargarSaldo,
                         this::pagarBoleto,
                         () -> eliminarPersona("pasajero")
                 });
+    }
+
+    private void filtrarPasajeros() throws Exception {
+        String texto = pedir("DNI, nombre o apellido a buscar");
+        imprimirLista(personaDAO.buscar(texto, "PASAJERO"), "sin coincidencias");
     }
 
     private void crearPasajero() throws Exception {
@@ -208,9 +233,27 @@ public class MenuConsola {
         String apellido = pedir("Apellido");
         String sube = pedir("Número SUBE (16 dígitos)");
         double saldo = pedirDecimal("Saldo inicial");
-        Pasajero p = new Pasajero(0, dni, nombre, apellido, sube, saldo);
+        Pasajero p = new Pasajero(dni, nombre, apellido, sube, saldo);
         int id = personaDAO.crear(p);
         System.out.println("  ✔ Pasajero registrado con id " + id + ".");
+    }
+
+    private void modificarPasajero() throws Exception {
+        Pasajero p = buscarPasajero(pedirEntero("ID del pasajero"));
+        String nombre = pedir("Nuevo nombre (vacío = mantener '" + p.getNombre() + "')");
+        if (!nombre.isBlank()) {
+            p.setNombre(nombre);
+        }
+        String apellido = pedir("Nuevo apellido (vacío = mantener '" + p.getApellido() + "')");
+        if (!apellido.isBlank()) {
+            p.setApellido(apellido);
+        }
+        String sube = pedir("Nueva SUBE (vacío = mantener '" + p.getNumeroSube() + "')");
+        if (!sube.isBlank()) {
+            p.setNumeroSube(sube);
+        }
+        personaDAO.actualizar(p);
+        System.out.println("  ✔ Pasajero actualizado: " + p);
     }
 
     private void cargarSaldo() throws Exception {
@@ -222,9 +265,16 @@ public class MenuConsola {
 
     private void pagarBoleto() throws Exception {
         Pasajero p = buscarPasajero(pedirEntero("ID del pasajero"));
-        p.pagarBoleto();
+        String txtTarifa = pedir("Tarifa (vacío = general " + Formato.pesos(Pasajero.TARIFA_BOLETO) + ")");
+        boolean pagado = txtTarifa.isBlank()
+                ? p.pagarBoleto()
+                : p.pagarBoleto(Validador.parsearDecimal(txtTarifa, "tarifa"));
         personaDAO.actualizar(p);
-        System.out.println("  ✔ Boleto pagado. " + p);
+        if (pagado) {
+            System.out.println("  ✔ Boleto abonado. " + p);
+        } else {
+            System.out.println("  ✘ Saldo insuficiente para abonar el boleto. " + p);
+        }
     }
 
     private void eliminarPersona(String que) throws Exception {
@@ -239,12 +289,21 @@ public class MenuConsola {
 
     private void menuVehiculos() {
         submenu("VEHÍCULOS",
-                new String[]{"Listar", "Registrar colectivo", "Registrar metrotranvía",
-                        "Poner / retirar de servicio", "Eliminar"},
+                new String[]{
+                        "Listar vehículos",
+                        "Buscar / filtrar vehículos (SQL)",
+                        "Registrar colectivo",
+                        "Registrar metrotranvía",
+                        "Modificar vehículo",
+                        "Poner / dejar fuera de servicio",
+                        "Eliminar vehículo"
+                },
                 new Accion[]{
                         () -> imprimirLista(vehiculoDAO.obtenerTodos(), "no hay vehículos"),
+                        this::filtrarVehiculos,
                         this::crearColectivo,
                         this::crearMetrotranvia,
+                        this::modificarVehiculo,
                         this::cambiarServicio,
                         () -> {
                             vehiculoDAO.eliminar(pedirEntero("ID del vehículo a eliminar"));
@@ -253,12 +312,25 @@ public class MenuConsola {
                 });
     }
 
+    private void filtrarVehiculos() throws Exception {
+        String texto = pedir("Patente o interno (vacío = cualquiera)");
+        String opTipo = pedir("Tipo: 1) Colectivo  2) Metrotranvía  (vacío = ambos)").trim();
+        String tipo = switch (opTipo) {
+            case "" -> null;
+            case "1" -> "COLECTIVO";
+            case "2" -> "METROTRANVIA";
+            default -> throw new EntradaInvalidaException("Tipo inválido '" + opTipo + "'.");
+        };
+        Boolean enServicio = pedirFiltroSiNo("¿En servicio?");
+        imprimirLista(vehiculoDAO.buscar(texto, tipo, enServicio), "sin vehículos que coincidan");
+    }
+
     private void crearColectivo() throws Exception {
         int interno = pedirEntero("Número de interno");
         String patente = pedir("Patente (ABC123 o AB123CD)");
         int capacidad = pedirEntero("Capacidad");
         boolean rampa = pedirSiNo("¿Tiene rampa?");
-        Colectivo c = new Colectivo(0, interno, patente, capacidad, false, rampa);
+        Colectivo c = new Colectivo(interno, patente, capacidad, false, rampa);
         int id = vehiculoDAO.crear(c);
         System.out.println("  ✔ Colectivo registrado con id " + id + ".");
     }
@@ -268,17 +340,47 @@ public class MenuConsola {
         String patente = pedir("Código/patente (ABC123 o AB123CD)");
         int capacidad = pedirEntero("Capacidad");
         int duplas = pedirEntero("Cantidad de duplas");
-        Metrotranvia m = new Metrotranvia(0, interno, patente, capacidad, false, duplas);
+        Metrotranvia m = new Metrotranvia(interno, patente, capacidad, false, duplas);
         int id = vehiculoDAO.crear(m);
         System.out.println("  ✔ Metrotranvía registrado con id " + id + ".");
     }
 
+    private void modificarVehiculo() throws Exception {
+        Vehiculo v = buscarVehiculo(pedirEntero("ID del vehículo"));
+        String patente = pedir("Nueva patente (vacío = mantener '" + v.getPatente() + "')");
+        if (!patente.isBlank()) {
+            v.setPatente(patente);
+        }
+        String cap = pedir("Nueva capacidad (vacío = mantener " + v.getCapacidad() + ")");
+        if (!cap.isBlank()) {
+            v.setCapacidad(Validador.parsearEntero(cap, "capacidad"));
+        }
+        if (v instanceof Colectivo c) {
+            Boolean rampa = pedirFiltroSiNo("¿Tiene rampa?");
+            if (rampa != null) {
+                c.setTieneRampa(rampa);
+            }
+        } else if (v instanceof Metrotranvia m) {
+            String duplas = pedir("Cantidad de duplas (vacío = mantener " + m.getCantidadDuplas() + ")");
+            if (!duplas.isBlank()) {
+                m.setCantidadDuplas(Validador.parsearEntero(duplas, "cantidad de duplas"));
+            }
+        }
+        vehiculoDAO.actualizar(v);
+        System.out.println("  ✔ Vehículo actualizado: " + v);
+    }
+
     private void cambiarServicio() throws Exception {
         Vehiculo v = buscarVehiculo(pedirEntero("ID del vehículo"));
-        if (pedirSiNo("¿Poner en servicio? (n = retirar)")) {
-            v.ponerEnServicio();
+        if (pedirSiNo("¿Poner en servicio? (n = fuera de servicio)")) {
+            String motivo = pedir("Motivo de alta en servicio (vacío = sin motivo)");
+            if (motivo.isBlank()) {
+                v.ponerEnServicio();
+            } else {
+                v.ponerEnServicio(motivo);
+            }
         } else {
-            v.retirarDeServicio();
+            v.fueraDeServicio();
         }
         vehiculoDAO.actualizar(v);
         System.out.println("  ✔ " + v);
@@ -290,10 +392,18 @@ public class MenuConsola {
 
     private void menuParadas() {
         submenu("PARADAS",
-                new String[]{"Listar", "Registrar parada", "Eliminar"},
+                new String[]{
+                        "Listar paradas",
+                        "Buscar / filtrar paradas (SQL)",
+                        "Registrar parada",
+                        "Modificar parada",
+                        "Eliminar parada"
+                },
                 new Accion[]{
                         () -> imprimirLista(paradaDAO.obtenerTodos(), "no hay paradas"),
+                        this::filtrarParadas,
                         this::crearParada,
+                        this::modificarParada,
                         () -> {
                             paradaDAO.eliminar(pedirEntero("ID de la parada a eliminar"));
                             System.out.println("  ✔ Eliminada.");
@@ -301,14 +411,37 @@ public class MenuConsola {
                 });
     }
 
+    private void filtrarParadas() throws Exception {
+        String texto = pedir("Código o dirección (vacío = cualquiera)");
+        Boolean garita = pedirFiltroSiNo("¿Con garita?");
+        imprimirLista(paradaDAO.buscar(texto, garita), "sin paradas que coincidan");
+    }
+
     private void crearParada() throws Exception {
-        int numero = pedirEntero("Número de parada");
-        String codigo = pedir("Código (formato MXXXX, ej. M0123)");
+        int numero = pedirEntero("Número de parada (1 a 9999)");
+        String codigoSugerido = Parada.generarCodigo(numero);
+        String codigo = pedir("Código (vacío = autogenerar " + codigoSugerido + ")");
         String direccion = pedir("Dirección");
         boolean garita = pedirSiNo("¿Tiene garita?");
-        Parada p = new Parada(0, numero, codigo, direccion, garita);
+        Parada p = codigo.isBlank()
+                ? new Parada(numero, direccion, garita)
+                : new Parada(0, numero, codigo, direccion, garita);
         int id = paradaDAO.crear(p);
-        System.out.println("  ✔ Parada registrada con id " + id + ".");
+        System.out.println("  ✔ Parada registrada con id " + id + ": " + p.resumen());
+    }
+
+    private void modificarParada() throws Exception {
+        Parada p = buscarParada(pedirEntero("ID de la parada"));
+        String direccion = pedir("Nueva dirección (vacío = mantener '" + p.getDireccion() + "')");
+        if (!direccion.isBlank()) {
+            p.setDireccion(direccion);
+        }
+        Boolean garita = pedirFiltroSiNo("¿Tiene garita?");
+        if (garita != null) {
+            p.setTieneGarita(garita);
+        }
+        paradaDAO.actualizar(p);
+        System.out.println("  ✔ Parada actualizada: " + p);
     }
 
     // =====================================================================
@@ -317,11 +450,22 @@ public class MenuConsola {
 
     private void menuPersonal() {
         submenu("PERSONAL",
-                new String[]{"Listar empleados", "Registrar chofer", "Registrar inspector", "Eliminar empleado"},
+                new String[]{
+                        "Listar empleados",
+                        "Buscar / filtrar personal (SQL)",
+                        "Registrar chofer",
+                        "Registrar inspector",
+                        "Asignar o desasignar vehículo a chofer",
+                        "Modificar zona de inspector",
+                        "Eliminar empleado"
+                },
                 new Accion[]{
                         this::listarEmpleados,
+                        this::filtrarPersonal,
                         this::crearChofer,
                         this::crearInspector,
+                        this::gestionarVehiculoChofer,
+                        this::modificarInspector,
                         () -> eliminarPersona("empleado")
                 });
     }
@@ -337,15 +481,27 @@ public class MenuConsola {
         }
     }
 
+    private void filtrarPersonal() throws Exception {
+        String texto = pedir("DNI, nombre o apellido (vacío = cualquiera)");
+        String opRol = pedir("Rol: 1) Chofer  2) Inspector  (vacío = ambos)").trim();
+        String tipo = switch (opRol) {
+            case "" -> "EMPLEADO";
+            case "1" -> "CHOFER";
+            case "2" -> "INSPECTOR";
+            default -> throw new EntradaInvalidaException("Rol inválido '" + opRol + "'.");
+        };
+        imprimirLista(personaDAO.buscar(texto, tipo), "sin empleados que coincidan");
+    }
+
     private void crearChofer() throws Exception {
         String dni = pedir("DNI (7-8 dígitos)");
         String nombre = pedir("Nombre");
         String apellido = pedir("Apellido");
-        String legajo = pedir("Legajo");
+        int legajo = pedirEntero("Legajo numérico");
         String licencia = pedir("Licencia");
         String idVehiculo = pedir("ID del vehículo asignado (vacío = ninguno)");
         Vehiculo v = idVehiculo.isBlank() ? null : buscarVehiculo(Validador.parsearEntero(idVehiculo, "id de vehículo"));
-        Chofer c = new Chofer(0, dni, nombre, apellido, legajo, licencia, v);
+        Chofer c = new Chofer(dni, nombre, apellido, legajo, licencia, v);
         int id = personaDAO.crear(c);
         System.out.println("  ✔ Chofer registrado con id " + id + ".");
     }
@@ -354,11 +510,36 @@ public class MenuConsola {
         String dni = pedir("DNI (7-8 dígitos)");
         String nombre = pedir("Nombre");
         String apellido = pedir("Apellido");
-        String legajo = pedir("Legajo");
+        int legajo = pedirEntero("Legajo numérico");
         String zona = pedir("Zona");
-        Inspector i = new Inspector(0, dni, nombre, apellido, legajo, zona);
+        Inspector i = new Inspector(dni, nombre, apellido, legajo, zona);
         int id = personaDAO.crear(i);
         System.out.println("  ✔ Inspector registrado con id " + id + ".");
+    }
+
+    private void gestionarVehiculoChofer() throws Exception {
+        Persona p = buscarPersona(pedirEntero("ID del chofer"));
+        if (!(p instanceof Chofer chofer)) {
+            throw new EntradaInvalidaException("La persona con id " + p.getId() + " no es un chofer.");
+        }
+        String idVehiculo = pedir("ID del vehículo a asignar (vacío = desasignar actual)");
+        if (idVehiculo.isBlank()) {
+            chofer.desasignarVehiculo();
+        } else {
+            chofer.asignarVehiculo(buscarVehiculo(Validador.parsearEntero(idVehiculo, "id de vehículo")));
+        }
+        personaDAO.actualizar(chofer);
+        System.out.println("  ✔ " + chofer);
+    }
+
+    private void modificarInspector() throws Exception {
+        Persona p = buscarPersona(pedirEntero("ID del inspector"));
+        if (!(p instanceof Inspector inspector)) {
+            throw new EntradaInvalidaException("La persona con id " + p.getId() + " no es un inspector.");
+        }
+        inspector.setZona(pedir("Nueva zona"));
+        personaDAO.actualizar(inspector);
+        System.out.println("  ✔ " + inspector);
     }
 
     // =====================================================================
@@ -367,11 +548,21 @@ public class MenuConsola {
 
     private void menuLineas() {
         submenu("LÍNEAS Y RECORRIDOS",
-                new String[]{"Listar líneas con su recorrido", "Crear línea", "Ver recorrido de ida y vuelta",
-                        "Consultar parada por posición", "Quitar parada de una línea", "Eliminar línea"},
+                new String[]{
+                        "Listar líneas con su recorrido",
+                        "Buscar línea por código o nombre (SQL)",
+                        "Crear línea",
+                        "Modificar línea (nombre / agregar parada o vehículo)",
+                        "Ver recorrido de ida y vuelta",
+                        "Consultar parada en posición",
+                        "Quitar parada por código",
+                        "Eliminar línea"
+                },
                 new Accion[]{
                         this::listarLineas,
+                        this::filtrarLineas,
                         this::crearLinea,
+                        this::modificarLinea,
                         this::verRecorrido,
                         this::consultarPosicion,
                         this::quitarParada,
@@ -389,8 +580,13 @@ public class MenuConsola {
         }
         for (Linea l : lineas) {
             System.out.println("  " + l);
-            System.out.println(l.getRecorrido().mostrarNormal());
+            l.getRecorrido().mostrarNormal();
         }
+    }
+
+    private void filtrarLineas() throws Exception {
+        String texto = pedir("Código o nombre de línea");
+        imprimirLista(lineaDAO.buscarPorTexto(texto), "sin líneas que coincidan");
     }
 
     private void crearLinea() throws Exception {
@@ -398,10 +594,12 @@ public class MenuConsola {
         String nombre = pedir("Nombre");
         List<Integer> idsParadas = pedirIds("IDs de paradas en orden, separados por coma");
         List<Integer> idsVehiculos = pedirIds("IDs de vehículos, separados por coma (vacío = ninguno)");
-        Linea linea = new Linea(0, codigo, nombre);
+        Linea linea = new Linea(codigo, nombre);
+        List<Parada> paradas = new ArrayList<>();
         for (int id : idsParadas) {
-            linea.getRecorrido().agregarParada(buscarParada(id));
+            paradas.add(buscarParada(id));
         }
+        linea.agregarParada(paradas);
         for (int id : idsVehiculos) {
             linea.agregarVehiculo(buscarVehiculo(id));
         }
@@ -409,28 +607,46 @@ public class MenuConsola {
         System.out.println("  ✔ Línea creada con id " + id + ".");
     }
 
+    private void modificarLinea() throws Exception {
+        Linea l = buscarLinea(pedirEntero("ID de la línea"));
+        String nombre = pedir("Nuevo nombre (vacío = mantener '" + l.getNombre() + "')");
+        if (!nombre.isBlank()) {
+            l.setNombre(nombre);
+        }
+        for (int idParada : pedirIds("IDs de paradas a agregar al final (vacío = ninguna)")) {
+            l.agregarParada(buscarParada(idParada));
+        }
+        for (int idVehiculo : pedirIds("IDs de vehículos a asociar (vacío = ninguno)")) {
+            l.agregarVehiculo(buscarVehiculo(idVehiculo));
+        }
+        lineaDAO.actualizar(l);
+        System.out.println("  ✔ Línea actualizada: " + l);
+    }
+
     private void verRecorrido() throws Exception {
         Linea l = buscarLinea(pedirEntero("ID de la línea"));
         System.out.println("  " + l);
         System.out.println("  Ida:");
-        System.out.println(l.getRecorrido().mostrarNormal());
+        l.getRecorrido().mostrarNormal();
         System.out.println("  Vuelta:");
-        System.out.println(l.getRecorrido().mostrarInvertido());
+        l.getRecorrido().mostrarInvertido();
     }
 
     private void consultarPosicion() throws Exception {
         Linea l = buscarLinea(pedirEntero("ID de la línea"));
         int pos = pedirEntero("Posición (empieza en 0)");
-        Parada p = l.getRecorrido().obtenerParada(pos); // puede lanzar PosicionInvalidaException
+        Parada p = l.obtenerParadaEn(pos);
         System.out.println("  ✔ En la posición " + pos + ": " + p.resumen());
     }
 
     private void quitarParada() throws Exception {
         Linea l = buscarLinea(pedirEntero("ID de la línea"));
-        int pos = pedirEntero("Posición a quitar (empieza en 0)");
-        Parada quitada = l.getRecorrido().eliminarParada(pos);
+        String codigo = pedir("Código de la parada a quitar (ej. M0003)");
+        if (!l.quitarParada(codigo)) {
+            throw new EntradaInvalidaException("La parada '" + codigo + "' no forma parte de la línea " + l.getCodigo() + ".");
+        }
         lineaDAO.actualizar(l);
-        System.out.println("  ✔ Se quitó " + quitada.resumen() + " del recorrido.");
+        System.out.println("  ✔ Se quitó " + codigo.trim().toUpperCase() + " del recorrido.");
     }
 
     // =====================================================================

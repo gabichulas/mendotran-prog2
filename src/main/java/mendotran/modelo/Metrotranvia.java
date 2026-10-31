@@ -10,6 +10,11 @@ public class Metrotranvia extends Vehiculo {
 
     private int cantidadDuplas;
 
+    public Metrotranvia(int interno, String patente, int capacidad,
+                        boolean enServicio, int cantidadDuplas) throws EntradaInvalidaException {
+        this(0, interno, patente, capacidad, enServicio, cantidadDuplas);
+    }
+
     public Metrotranvia(int id, int interno, String patente, int capacidad,
                         boolean enServicio, int cantidadDuplas) throws EntradaInvalidaException {
         super(id, interno, patente, capacidad, enServicio);
@@ -35,7 +40,7 @@ public class Metrotranvia extends Vehiculo {
     }
 
     @Override
-    protected String detalleEspecifico() {
-        return "duplas: " + cantidadDuplas;
+    public String inspeccionar() {
+        return super.inspeccionar() + " | duplas: " + cantidadDuplas;
     }
 }

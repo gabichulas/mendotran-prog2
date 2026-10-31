@@ -7,7 +7,12 @@ public class Inspector extends Empleado {
 
     private String zona;
 
-    public Inspector(int id, String dni, String nombre, String apellido, String legajo, String zona)
+    public Inspector(String dni, String nombre, String apellido, int legajo, String zona)
+            throws EntradaInvalidaException {
+        this(0, dni, nombre, apellido, legajo, zona);
+    }
+
+    public Inspector(int id, String dni, String nombre, String apellido, int legajo, String zona)
             throws EntradaInvalidaException {
         super(id, dni, nombre, apellido, legajo);
         this.zona = Validador.texto(zona, "zona");
@@ -17,13 +22,17 @@ public class Inspector extends Empleado {
         return zona;
     }
 
+    public void setZona(String zona) throws EntradaInvalidaException {
+        this.zona = Validador.texto(zona, "zona");
+    }
+
     @Override
     public String mostrarRol() {
         return "Inspector - zona " + zona;
     }
 
     /**
-     * Audita cualquier objeto {@link Inspeccionable} (Pasajero, Vehiculo, Parada...).
+     * Audita cualquier objeto {@link Inspeccionable} (Pasajero, Vehiculo, Parada).
      * Sobrecarga sin observación.
      */
     public String auditar(Inspeccionable objetivo) throws EntradaInvalidaException {
